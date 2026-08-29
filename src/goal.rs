@@ -110,7 +110,7 @@ pub fn transcript_text(messages: &[Message]) -> String {
 fn transcript_text_with(messages: &[Message], max_characters: usize) -> String {
     let rendered: Vec<String> = messages
         .iter()
-        .map(|m| format!("{}:\n{}", m.role.to_uppercase(), plain_content(&m.content)))
+        .map(|m| format!("{}:\n{}", m.role.as_str().to_uppercase(), plain_content(&m.content)))
         .collect();
 
     let marker = "\n...[middle omitted]...\n";

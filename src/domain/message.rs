@@ -5,10 +5,42 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Conversation role (docs §3.1).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+impl Role {
+    /// Wire string for this role (`"system"` / `"user"` / `"assistant"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Default for Role {
+    fn default() -> Self {
+        Role::User
+    }
+}
+
 /// A message.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Message {
-    pub role: String,
+    pub role: Role,
     pub content: Vec<ContentBlock>,
 }
 
@@ -53,7 +85,7 @@ impl Message {
     /// Single user text message (role="user" + one Text block).
     pub fn user_text(text: impl Into<String>) -> Self {
         Self {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::Text { text: text.into() }],
         }
     }
@@ -61,7 +93,7 @@ impl Message {
     /// Single user tool-output message (role="user" + one ToolOutput block).
     pub fn user_tool_output(call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
-            role: "user".to_string(),
+            role: Role::User,
             content: vec![ContentBlock::ToolOutput {
                 call_id: call_id.into(),
                 content: content.into(),
@@ -72,7 +104,7 @@ impl Message {
     /// assistant message wrapping existing content blocks (e.g. replay API response).
     pub fn assistant_content(content: Vec<ContentBlock>) -> Self {
         Self {
-            role: "assistant".to_string(),
+            role: Role::Assistant,
             content,
         }
     }
@@ -80,7 +112,7 @@ impl Message {
     /// user message wrapping existing content blocks (tool results, reminders).
     pub fn user_blocks(content: Vec<ContentBlock>) -> Self {
         Self {
-            role: "user".to_string(),
+            role: Role::User,
             content,
         }
     }
@@ -98,7 +130,7 @@ impl Message {
 /// Text/ToolCall/ToolOutput blocks, then `.build()`.
 #[derive(Default)]
 pub struct MessageBuilder {
-    role: String,
+    role: Role,
     content: Vec<ContentBlock>,
 }
 
@@ -108,21 +140,21 @@ impl MessageBuilder {
         Self::default()
     }
 
-    /// Set role to user (same as `.role("user")`).
+    /// Set role to user (same as `.role(Role::User)`).
     pub fn user(mut self) -> Self {
-        self.role = "user".to_string();
+        self.role = Role::User;
         self
     }
 
-    /// Set role to assistant (same as `.role("assistant")`).
+    /// Set role to assistant (same as `.role(Role::Assistant)`).
     pub fn assistant(mut self) -> Self {
-        self.role = "assistant".to_string();
+        self.role = Role::Assistant;
         self
     }
 
     /// Set the role.
-    pub fn role(mut self, role: impl Into<String>) -> Self {
-        self.role = role.into();
+    pub fn role(mut self, role: Role) -> Self {
+        self.role = role;
         self
     }
 
@@ -222,8 +254,32 @@ mod tests {
     #[test]
     fn message_user_text_roundtrip() {
         let m = Message::user_text("hello");
-        assert_eq!(m.role, "user");
+        assert_eq!(m.role, Role::User);
         assert_eq!(m.content.len(), 1);
         assert!(matches!(m.content[0], ContentBlock::Text { .. }));
+    }
+
+    #[test]
+    fn role_serializes_to_lowercase_wire_string() {
+        // Lock the provider wire contract: a Role must serialize to a bare
+        // lowercase string, NOT an externally-tagged {"User": ...}. Removing
+        // #[serde(rename_all = "lowercase")] must turn this red.
+        assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
+        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
+        assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
+    }
+
+    #[test]
+    fn message_role_roundtrips_wire_format() {
+        // Round-trip must preserve role AND content shape (tagged ContentBlock).
+        let m = Message::user_text("hi");
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(
+            json,
+            r#"{"role":"user","content":[{"type":"text","text":"hi"}]}"#
+        );
+        let back: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.role, Role::User);
+        assert_eq!(back.content.len(), 1);
     }
 }

@@ -172,7 +172,7 @@ pub fn assemble_post_tool_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::message::Message;
+    use crate::domain::message::{Message, Role};
 
     struct AlwaysBlock;
     #[async_trait::async_trait]
@@ -251,7 +251,7 @@ mod tests {
         }
 
         // Reminder is a new user message, a Text block (not a tool_output)
-        assert_eq!(msgs[1].role, "user");
+        assert_eq!(msgs[1].role, Role::User);
         match &msgs[1].content[0] {
             ContentBlock::Text { text } => {
                 assert_eq!(text, "<reminder>Update your todos.</reminder>");
@@ -273,7 +273,7 @@ mod tests {
         // produce an empty content message (otherwise API 400 "content cannot be empty").
         let msgs = assemble_post_tool_messages(vec![], vec![]);
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].role, Role::User);
         assert!(!msgs[0].content.is_empty(), "must not emit empty content");
         match &msgs[0].content[0] {
             ContentBlock::Text { text } => assert!(!text.is_empty()),
@@ -289,7 +289,7 @@ mod tests {
             vec!["<reminder>Update your todos.</reminder>".to_string()],
         );
         assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].role, Role::User);
         match &msgs[0].content[0] {
             ContentBlock::Text { text } => {
                 assert_eq!(text, "<reminder>Update your todos.</reminder>");

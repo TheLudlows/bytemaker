@@ -33,7 +33,7 @@
 //!
 //! Details: `docs/modules/memory.md`.
 
-use crate::domain::message::{ContentBlock, Message, MessagesResponse};
+use crate::domain::message::{ContentBlock, Message, MessagesResponse, Role};
 use crate::providers::LlmProvider;
 use crate::error::AgentError;
 use serde::{Deserialize, Serialize};
@@ -773,7 +773,7 @@ fn take_chars(s: &str, n: usize) -> String {
 fn recent_user_text(messages: &[Message], max_turns: usize) -> String {
     let mut turns: Vec<String> = Vec::new();
     for msg in messages.iter().rev() {
-        if msg.role != "user" {
+        if msg.role != Role::User {
             continue;
         }
         let text = message_text(msg);

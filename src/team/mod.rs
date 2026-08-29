@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::domain::message::{ContentBlock, Message};
+use crate::domain::message::{ContentBlock, Message, Role};
 use crate::task_system::task::{Task, TaskStatus};
 use crate::task_system::store::TaskStore;
 use crate::team::assignment::{Assignment, AssignmentRegistry};
@@ -291,7 +291,7 @@ pub fn extract_last_assistant_text(messages: &[Message]) -> Option<String> {
     messages
         .iter()
         .rev()
-        .find(|m| m.role == "assistant")
+        .find(|m| m.role == Role::Assistant)
         .and_then(|m| {
             m.content.iter().rev().find_map(|b| match b {
                 ContentBlock::Text { text } => Some(text.clone()),

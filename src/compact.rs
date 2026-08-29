@@ -25,7 +25,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use crate::domain::message::{ContentBlock, Message, MessagesResponse};
+use crate::domain::message::{ContentBlock, Message, MessagesResponse, Role};
 use crate::providers::LlmProvider;
 use crate::error::AgentError;
 
@@ -70,7 +70,7 @@ impl ContextCompactor {
 
     /// Whether the message (assistant) contains a tool_call block.
     pub fn has_tool_call(message: &Message) -> bool {
-        message.role == "assistant"
+        message.role == Role::Assistant
             && message
                 .content
                 .iter()
@@ -79,7 +79,7 @@ impl ContextCompactor {
 
     /// Whether the message (user) contains a tool_output block.
     pub fn is_tool_output(message: &Message) -> bool {
-        message.role == "user"
+        message.role == Role::User
             && message
                 .content
                 .iter()
@@ -159,7 +159,7 @@ impl ContextCompactor {
     /// persist blocks > LARGE_RESULT_CHAR_LIMIT by size desc. Only touches tool_output blocks in the last user message.
     pub fn tool_output_budget(&self, messages: &mut [Message]) {
         let last = match messages.last_mut() {
-            Some(m) if m.role == "user" => m,
+            Some(m) if m.role == Role::User => m,
             _ => return,
         };
         // Collect (index, len) of all tool_output blocks in this message, sort by len desc.
@@ -277,7 +277,7 @@ impl ContextCompactor {
         // record (msg_idx, block_idx) first, then access again.
         let mut locations: Vec<(usize, usize)> = Vec::new();
         for (mi, m) in messages.iter().enumerate() {
-            if m.role != "user" {
+            if m.role != Role::User {
                 continue;
             }
             for (bi, b) in m.content.iter().enumerate() {
@@ -765,7 +765,7 @@ mod tests {
     fn summary_message_separates_request_and_summary() {
         let m =
             ContextCompactor::summary_message("Compacted", "do X", "goal: X", "/tmp/t.jsonl");
-        assert_eq!(m.role, "user");
+        assert_eq!(m.role, Role::User);
         match &m.content[0] {
             ContentBlock::Text { text } => {
                 assert!(text.contains("[Compacted]"));
