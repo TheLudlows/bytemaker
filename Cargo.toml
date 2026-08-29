@@ -1,0 +1,43 @@
+[package]
+name = "bytemaker"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Under `cfg(test)`, spawn teammates for real (instead of the test stub) when on
+# (see team/runtime.rs). cargo test -p bytemaker --features smoke
+smoke = []
+
+[dependencies]
+dotenv = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+futures-util = "0.3"
+serde_yaml = "0.9"
+async-trait = "0.1"
+glob = "0.3"
+encoding_rs = "0.8"
+path-clean = "1"
+dunce = "1"
+thiserror = "2"
+colored = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+fastrand = "2.1"
+regex = "1"
+croner = "3"
+fs4 = "0.9"
+sha2 = "0.10"
+crossterm = "0.29"
+reedline = { version = "0.50", features = ["bashisms"] }
+tokio-util = "0.7"
+rmcp = { version = "3", features = ["client", "transport-child-process"] }
+async-openai = { version = "0.41", default-features = false, features = ["chat-completion", "rustls"] }  # 请使用最新版本
+async-openai-macros="0.3"
+[dev-dependencies]
+tempfile = "3"
