@@ -25,7 +25,7 @@ cargo run --release
 
 ```bash
 cargo run -- eval run --suite core --replay   # 离线回放盒带，CI 用（无需 OPENAI_API_KEY）
-cargo run -- eval run --suite core --live     # 真实 LLM，测真实成功率
+cargo run -- eval run --suite core --live     # 真实 LLM，测真实成功率（需 OPENAI_API_KEY，会产生真实计费调用）
 cargo run -- eval compare evals/runs/A.json evals/runs/B.json   # 回归对比
 ```
 

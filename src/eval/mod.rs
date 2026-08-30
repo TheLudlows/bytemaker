@@ -452,27 +452,53 @@ tasks:
         max_steps: 2
 "#;
 
+    /// 给工具调用响应补上非零用量（`resp_with_usage` 只覆盖纯文本响应）。
+    fn usage(
+        mut r: crate::domain::message::MessagesResponse,
+        input: u64,
+        output: u64,
+    ) -> crate::domain::message::MessagesResponse {
+        r.usage = Some(crate::domain::message::Usage { input_tokens: input, output_tokens: output });
+        r
+    }
+
+    /// 脚本里的用量全部非零且各不相同：token 证据的录制/回放对比不是 0==0 的空断言。
     fn demo_script() -> Vec<crate::domain::message::MessagesResponse> {
         vec![
             // task 1: read_file -> final answer -> judge
-            fault::tool_call_response("c1", "read_file", serde_json::json!({"path": "README.md"})),
-            fault::text_response("The project is a demo project for evals."),
-            fault::text_response(r#"{"pass": true, "score": 1.0, "rationale": "accurate"}"#),
+            usage(
+                fault::tool_call_response("c1", "read_file", serde_json::json!({"path": "README.md"})),
+                120,
+                45,
+            ),
+            fault::resp_with_usage("The project is a demo project for evals.", 200, 30),
+            fault::resp_with_usage(
+                r#"{"pass": true, "score": 1.0, "rationale": "accurate"}"#,
+                350,
+                20,
+            ),
             // task 2: 直接回答（无 judge 断言）
-            fault::text_response("hello agent"),
+            fault::resp_with_usage("hello agent", 10, 5),
         ]
     }
 
-    /// 候选运行脚本：read_file 被弄坏（空输出）→ 证据缺失 → judge 打分失败
-    /// （只改第 3 个响应，见任务简报「修正说明」）。
+    /// 候选运行脚本：与 `demo_script` 的差异是 (a) agent 最终答案退化为
+    /// 「没读到 README」、(b) judge 裁决失败——judge 的失败至少经由候选的退化
+    /// 答案传导（answer-mediated），而不是与 agent 行为脱钩的纯脚本裁决。
     fn demo_script_broken_judge() -> Vec<crate::domain::message::MessagesResponse> {
         vec![
-            fault::tool_call_response("c1", "read_file", serde_json::json!({"path": "README.md"})),
-            fault::text_response("The project is a demo project for evals."),
-            fault::text_response(
-                r#"{"pass": false, "score": 0.0, "rationale": "no evidence: README content was empty"}"#,
+            usage(
+                fault::tool_call_response("c1", "read_file", serde_json::json!({"path": "README.md"})),
+                120,
+                45,
             ),
-            fault::text_response("hello agent"),
+            fault::resp_with_usage("I could not read README.md.", 200, 30),
+            fault::resp_with_usage(
+                r#"{"pass": false, "score": 0.0, "rationale": "no evidence: README content was empty"}"#,
+                350,
+                20,
+            ),
+            fault::resp_with_usage("hello agent", 10, 5),
         ]
     }
 
@@ -525,6 +551,12 @@ tasks:
         assert_eq!(a.metrics.steps, b.metrics.steps, "steps must match");
         assert_eq!(a.metrics.tool_calls, b.metrics.tool_calls, "tool sequence must match");
         assert_eq!(a.metrics.prompt_tokens, b.metrics.prompt_tokens, "recorded usage replays");
+        assert!(
+            a.metrics.prompt_tokens > 0 && b.metrics.prompt_tokens > 0,
+            "token evidence must be non-zero (scripted usage is non-zero), got {} / {}",
+            a.metrics.prompt_tokens,
+            b.metrics.prompt_tokens
+        );
         assert_eq!(
             a.judge.as_ref().unwrap().rationale,
             b.judge.as_ref().unwrap().rationale,
@@ -603,9 +635,11 @@ tasks:
         assert!(failure.contains("forbidden tool used: write_file"), "got: {failure}");
     }
 
-    /// 验收 #6：故意弄坏一个工具（read_file 返回空），compare 必须把成功率下降与
-    /// 新增失败任务明确标出。基线用健康 registry + 全绿 judge；候选用
-    /// broken_registry(["read_file"]) + judge 失败脚本（唯一差异是 read_file 失效）。
+    /// 验收 #6：compare 必须把成功率下降与新增失败任务明确标出。候选用
+    /// broken_registry(["read_file"]) + 退化答案脚本（agent 最终回答声称没读到
+    /// README，judge 据此判失败）——本测试确立的证据链是「候选答案退化 → judge
+    /// 失败 → 成功率下降被标出」；broken registry 自身的效果（工具输出为空）由
+    /// 脚本间接代表，不被断言直接观察。
     #[tokio::test]
     async fn e2e_compare_flags_broken_tool_regression() {
         let evals = test_env();
@@ -642,13 +676,13 @@ tasks:
         .run()
         .await
         .unwrap();
-        // read_file 返回空 → 回答证据缺失 → judge 打分失败（脚本里 judge 对空证据扣分）。
+        // 候选答案退化（脚本代表 read_file 空输出的后果）→ judge 判失败 → compare 标出。
         let c = report::compare(&baseline, &candidate);
         assert!(c.rate_delta < 0.0);
         assert_eq!(c.newly_failed, vec!["read-summary".to_string()]);
         let text = report::render_compare(&c);
         assert!(text.contains("NEWLY FAILED: read-summary"), "got: {text}");
-        assert!(text.contains("-50.0 pts") || text.contains("pts"), "rate drop must be shown");
+        assert!(text.contains("-50.0 pts"), "rate drop must be shown with its value: {text}");
     }
 
     mod cli_tests {
@@ -718,27 +752,61 @@ tasks:
         }
 
         fn core_script() -> Vec<crate::domain::message::MessagesResponse> {
-            use fault::{text_response, tool_call_response as tc};
+            use fault::{tool_call_response as tc};
+            // 用量全部非零且各不相同：提交版盒带携带真实形态的 token 证据，
+            // 离线回放的 token 指标不再是全零占位。
             vec![
                 // 1. read-project-summary: read_file -> 回答 -> judge
-                tc("c1", "read_file", serde_json::json!({"path": "README.md"})),
-                text_response("bytemaker is a hands-on tutorial that builds a Claude Code-style coding agent in Rust, step by step."),
-                text_response(r#"{"pass": true, "score": 1.0, "rationale": "accurate summary"}"#),
+                usage(tc("c1", "read_file", serde_json::json!({"path": "README.md"})), 110, 40),
+                fault::resp_with_usage(
+                    "bytemaker is a hands-on tutorial that builds a Claude Code-style coding agent in Rust, step by step.",
+                    240,
+                    35,
+                ),
+                fault::resp_with_usage(
+                    r#"{"pass": true, "score": 1.0, "rationale": "accurate summary"}"#,
+                    310,
+                    25,
+                ),
                 // 2. create-and-read-back: write_file -> read_file -> 回答 -> judge
-                tc("c2", "write_file", serde_json::json!({"path": "test.py", "content": "print(\"hello\")\n"})),
-                tc("c3", "read_file", serde_json::json!({"path": "test.py"})),
-                text_response(r#"Created test.py containing print("hello") and read it back — the file exists and prints hello."#),
-                text_response(r#"{"pass": true, "score": 1.0, "rationale": "file created and read back"}"#),
+                usage(
+                    tc("c2", "write_file", serde_json::json!({"path": "test.py", "content": "print(\"hello\")\n"})),
+                    150,
+                    50,
+                ),
+                usage(tc("c3", "read_file", serde_json::json!({"path": "test.py"})), 260, 45),
+                fault::resp_with_usage(
+                    r#"Created test.py containing print("hello") and read it back — the file exists and prints hello."#,
+                    380,
+                    60,
+                ),
+                fault::resp_with_usage(
+                    r#"{"pass": true, "score": 1.0, "rationale": "file created and read back"}"#,
+                    410,
+                    30,
+                ),
                 // 3. find-python-files: glob -> 回答 -> judge
-                tc("c4", "glob", serde_json::json!({"pattern": "**/*.py"})),
-                text_response("There are no Python files in this directory."),
-                text_response(r#"{"pass": true, "score": 1.0, "rationale": "correctly reports none"}"#),
+                usage(tc("c4", "glob", serde_json::json!({"pattern": "**/*.py"})), 130, 25),
+                fault::resp_with_usage("There are no Python files in this directory.", 220, 20),
+                fault::resp_with_usage(
+                    r#"{"pass": true, "score": 1.0, "rationale": "correctly reports none"}"#,
+                    180,
+                    15,
+                ),
                 // 4. minimal-agent-question: 直接回答 -> judge
-                text_response("hello agent"),
-                text_response(r#"{"pass": true, "score": 1.0, "rationale": "exact match"}"#),
+                fault::resp_with_usage("hello agent", 90, 10),
+                fault::resp_with_usage(
+                    r#"{"pass": true, "score": 1.0, "rationale": "exact match"}"#,
+                    120,
+                    12,
+                ),
                 // 5. read-only-discipline: read_file -> 回答（无 judge 断言）
-                tc("c5", "read_file", serde_json::json!({"path": "README.md"})),
-                text_response("The first heading of README.md is: # bytemaker"),
+                usage(tc("c5", "read_file", serde_json::json!({"path": "README.md"})), 170, 30),
+                fault::resp_with_usage(
+                    "The first heading of README.md is: # bytemaker",
+                    230,
+                    28,
+                ),
             ]
         }
 
@@ -795,6 +863,12 @@ tasks:
             );
             // 验收 #5：≥5 个种子任务。
             assert!(report.tasks.len() >= 5, "got {} tasks", report.tasks.len());
+            // 提交版盒带携带非零 token 用量（脚本生成时即非零），回放指标非全零。
+            assert!(
+                report.tasks.iter().all(|t| t.metrics.prompt_tokens > 0),
+                "every task must replay non-zero prompt tokens: {:?}",
+                report.tasks.iter().map(|t| t.metrics.prompt_tokens).collect::<Vec<_>>()
+            );
         }
     }
 }

@@ -6,7 +6,8 @@
 //!
 //! 设计说明：重试逻辑在 `OpenAiProvider` 内部由 async-openai 的 `OpenAIRetry`
 //! 层承担，`LlmProvider` trait 层没有可测的重试路径。`RetryProvider` 把重试
-//! 提升到防腐层（eval live 模式直接受益），`FaultyProvider` 因此能**零网络**
+//! 提升到防腐层（供调用方与故障注入测试在 trait 层使用；eval live 模式目前
+//! 依赖 SDK 内部重试，未包 `RetryProvider`），`FaultyProvider` 因此能**零网络**
 //! 验证「429×2 后成功，总调用 = 3」（验收 #4）。
 
 use std::collections::VecDeque;
@@ -169,7 +170,8 @@ impl LlmProvider for FaultyProvider {
 
 /// trait 层重试：`RateLimit | Network | Timeout` 指数退避重试（base * 2^attempt）。
 /// `OpenAiProvider` 内部另有 async-openai 的 `OpenAIRetry`；`RetryProvider` 把重试
-/// 提升到防腐层，使 eval live 模式与故障注入测试共用同一套可验证逻辑。
+/// 提升到防腐层，供需要 trait 层重试的调用方与故障注入测试共用同一套可验证逻辑
+/// （eval live 模式目前直接用裸 Provider，依赖 SDK 内部重试）。
 pub struct RetryProvider {
     inner: Arc<dyn LlmProvider>,
     max_retries: u32,

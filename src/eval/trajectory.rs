@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::domain::message::{Message, MessagesResponse};
+use crate::domain::message::Message;
 use crate::hooks::PostToolHook;
 use crate::providers::{CallResult, LlmProvider};
 use crate::tools::trait_def::ToolDefinition;
@@ -171,10 +171,6 @@ pub fn compose(snapshot: CollectorSnapshot, meter: (u64, u64, u64)) -> Trajector
         loop_detected: snapshot.loop_detected,
     }
 }
-
-/// 抑制未使用告警（MessagesResponse 仅在类型层面出现）。
-#[allow(dead_code)]
-fn _assert_response_type(_: Option<MessagesResponse>) {}
 
 #[cfg(test)]
 mod tests {

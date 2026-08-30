@@ -971,7 +971,8 @@ impl TestAgent {
             "test-model".into(),
         ));
         // TaskStore::new compares the passed dir against current_dir to block out-of-bounds
-        // access; tempdir isn't in the workspace, so use the cfg-test create_test_store
+        // access; tempdir isn't in the workspace, so use create_test_store (cfg(test) gate
+        // lifted in ch5 — Agent::isolated stages eval agents in temp workspaces the same way)
         // to assemble directly (bypassing validation).
         let task_store = Arc::new(crate::task_system::store::create_test_store(&workdir));
         let bg_manager = Arc::new(BackgroundManager::new(
@@ -1103,7 +1104,9 @@ mod tests {
     }
 
     #[test]
-    fn isolated_agent_has_no_cron_goal_team_and_readonly_memory() {
+    // Note: isolated agents also get a read-only MemoryStore, but MemoryStore exposes
+    // no mode accessor to assert on (read-only behavior is covered in memory tests).
+    fn isolated_agent_has_no_cron_goal_or_team() {
         let tmp = tempfile::TempDir::new().unwrap();
         let client: Arc<dyn LlmProvider> = Arc::new(crate::providers::MockProvider::new("x"));
         let io = Arc::new(crate::io::IO::memory());

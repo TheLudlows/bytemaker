@@ -328,17 +328,6 @@ pub(crate) mod tests {
     use crate::providers::{CallResult, LlmProvider, MockProvider};
     use std::path::PathBuf;
 
-    /// 两个响应的脚本 inner（ScriptedProvider 在 Task 3 才有，这里用最朴素的办法：
-    /// 直接手写 entries + MockProvider，验证 cassette 自身行为）。
-    #[allow(dead_code)] // Task 3（ScriptedProvider）将使用
-    fn text_response(text: &str) -> RecordedResponse {
-        RecordedResponse {
-            content: vec![ContentBlock::text(text)],
-            finish_reason: "stop".to_string(),
-            usage: None,
-        }
-    }
-
     #[tokio::test]
     async fn record_writes_jsonl_entries_then_replay_roundtrips() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -410,7 +399,7 @@ pub(crate) mod tests {
                 let msg = e.to_string();
                 assert!(msg.contains("cassette drift at call #1"), "got: {msg}");
                 assert!(msg.contains("re-record"), "got: {msg}");
-                assert!(msg.contains("summarize") || msg.contains("summarise"), "diff must show the changed word: {msg}");
+                assert!(msg.contains("summarize") && msg.contains("summarise"), "diff must show both sides of the changed word: {msg}");
             }
             other => panic!("expected Failure(drift), got {:?}", other),
         }

@@ -13,6 +13,10 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), AgentError> {
+    // .env 先于一切子命令加载：`eval --live/--record` 需要 OPENAI_API_KEY
+    // （README 的 setup 就是 `cp .env.example .env`）；`--replay` 不读 key，不受影响。
+    dotenv().ok();
+
     // ch5: `bytemaker eval ...` 子命令。必须在 Config::from_env() 之前分发——
     // `--replay` 离线回放不要求 OPENAI_API_KEY（docs/5.evals.md 验收 #3）。
     let argv: Vec<String> = std::env::args().collect();
@@ -20,7 +24,6 @@ async fn main() -> Result<(), AgentError> {
         return bytemaker::eval::run_cli(&argv[2..]).await;
     }
 
-    dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
