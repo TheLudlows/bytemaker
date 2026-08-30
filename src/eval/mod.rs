@@ -37,6 +37,21 @@ pub enum ProviderSpec {
     Live { provider: Arc<dyn LlmProvider> },
 }
 
+/// 手写 Debug（内部 Provider 是 trait 对象无法 derive）；CLI 测试的失败信息用。
+impl std::fmt::Debug for ProviderSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProviderSpec::Replay { cassette } => {
+                write!(f, "Replay {{ cassette: {} }}", cassette.display())
+            }
+            ProviderSpec::Record { cassette, .. } => {
+                write!(f, "Record {{ cassette: {} }}", cassette.display())
+            }
+            ProviderSpec::Live { .. } => write!(f, "Live {{ provider: .. }}"),
+        }
+    }
+}
+
 /// 评测运行器：任务集 → 逐任务（布景 → 跑标准 agent loop → 断言）→ 报告。
 ///
 /// 每任务流程：布景临时 workspace → 组装该任务的 masks（基础规则 + workspace
@@ -251,6 +266,154 @@ impl crate::tools::Tool for BrokenTool {
         _input: &serde_json::Value,
     ) -> String {
         String::new()
+    }
+}
+
+/// eval 子命令用法。
+pub const USAGE: &str = "usage:\n  bytemaker eval run --suite <name> [--replay|--live|--record] [--cassette <path>]\n  bytemaker eval compare <baseline.json> <candidate.json>";
+
+/// `bytemaker eval ...` 入口（main.rs 在读取 OPENAI_API_KEY 之前分发，
+/// 保证 `--replay` 离线可用，验收 #3）。
+pub async fn run_cli(args: &[String]) -> Result<(), AgentError> {
+    match args.first().map(String::as_str) {
+        Some("run") => cli_run(&args[1..]).await,
+        Some("compare") => cli_compare(&args[1..]),
+        _ => Err(AgentError::Other(USAGE.to_string())),
+    }
+}
+
+fn has_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| a == name)
+}
+
+fn flag_value(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .filter(|v| !v.starts_with("--"))
+        .cloned()
+}
+
+async fn cli_run(args: &[String]) -> Result<(), AgentError> {
+    let suite_name = flag_value(args, "--suite").unwrap_or_else(|| "core".to_string());
+    let evals_dir = PathBuf::from("evals");
+    let suite_path = evals_dir.join("suites").join(format!("{suite_name}.yaml"));
+    let suite = suite::EvalSuite::from_yaml_file(&suite_path).map_err(AgentError::Other)?;
+    let spec = resolve_spec(args, &suite_name, default_cassette)?;
+    let runner = EvalRunner::new(
+        evals_dir.clone(),
+        suite,
+        spec,
+        Arc::new(crate::tools::build_registry()),
+    )?;
+    let report = runner.run().await?;
+
+    let runs_dir = evals_dir.join("runs");
+    let path = runs_dir.join(format!(
+        "{}-{suite_name}.json",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    ));
+    report.write_json(&path).map_err(AgentError::Other)?;
+    println!("{}", report.render_table());
+    println!("report written to {}", path.display());
+    Ok(())
+}
+
+fn cli_compare(args: &[String]) -> Result<(), AgentError> {
+    if args.len() != 2 {
+        return Err(AgentError::Other(USAGE.to_string()));
+    }
+    let baseline = report::RunReport::from_json_file(&PathBuf::from(&args[0]))
+        .map_err(AgentError::Other)?;
+    let candidate = report::RunReport::from_json_file(&PathBuf::from(&args[1]))
+        .map_err(AgentError::Other)?;
+    println!("{}", report::render_compare(&report::compare(&baseline, &candidate)));
+    Ok(())
+}
+
+/// 默认盒带查找：`--cassette` > `BYTEMAKER_CASSETTE` > `evals/cassettes/<suite>.json`。
+fn default_cassette(suite_name: &str) -> Option<PathBuf> {
+    Some(PathBuf::from("evals/cassettes").join(format!("{suite_name}.json")))
+}
+
+/// 模式解析（优先级：显式 flag > BYTEMAKER_CASSETTE > 报错）。
+/// `cassette_default` 由测试注入（生产传 `default_cassette`）。
+fn resolve_spec(
+    args: &[String],
+    suite_name: &str,
+    // impl Fn 而非 fn 指针：测试注入的闭包捕获了局部 PathBuf（fn 指针不收捕获闭包）。
+    cassette_default: impl Fn(&str) -> Option<PathBuf>,
+) -> Result<ProviderSpec, AgentError> {
+    let env_spec = cassette::spec_from_env().map_err(AgentError::Other)?;
+    // 预先取出 env 路径：`CassetteSpec` 非 Clone，在闭包里直接 match 会把
+    // `env_spec` 整体 move 走，与末尾的 match 冲突（borrowck）。
+    let env_replay = match &env_spec {
+        Some(cassette::CassetteSpec::Replay(p)) => Some(p.clone()),
+        _ => None,
+    };
+    let env_record = match &env_spec {
+        Some(cassette::CassetteSpec::Record(p)) => Some(p.clone()),
+        _ => None,
+    };
+    let from_flag = || flag_value(args, "--cassette").map(PathBuf::from);
+    let default_path = || cassette_default(suite_name);
+
+    let live = || -> Result<ProviderSpec, AgentError> {
+        let cfg = crate::config::Config::from_env()?;
+        Ok(ProviderSpec::Live {
+            provider: Arc::new(crate::providers::openai::OpenAiProvider::new(
+                cfg.api_key,
+                cfg.base_url,
+                cfg.model.clone(),
+            )),
+        })
+    };
+    let record = |path: PathBuf| -> Result<ProviderSpec, AgentError> {
+        let cfg = crate::config::Config::from_env()?;
+        Ok(ProviderSpec::Record {
+            cassette: path,
+            inner: Box::new(crate::providers::openai::OpenAiProvider::new(
+                cfg.api_key,
+                cfg.base_url,
+                cfg.model.clone(),
+            )),
+            model: cfg.model,
+        })
+    };
+
+    if has_flag(args, "--live") {
+        return live();
+    }
+    if has_flag(args, "--record") {
+        let path = from_flag()
+            .or(env_record)
+            .or_else(default_path)
+            .ok_or_else(|| AgentError::Other("no cassette path for --record".into()))?;
+        return record(path);
+    }
+    if has_flag(args, "--replay") {
+        let path = from_flag()
+            .or(env_replay)
+            .or_else(default_path)
+            .ok_or_else(|| AgentError::Other(format!(
+                "replay cassette for suite '{suite_name}' does not exist; \
+                 record first with `bytemaker eval run --suite {suite_name} --record`"
+            )))?;
+        if !path.exists() {
+            return Err(AgentError::Other(format!(
+                "cassette {} does not exist; record first with `bytemaker eval run --suite {suite_name} --record`",
+                path.display()
+            )));
+        }
+        return Ok(ProviderSpec::Replay { cassette: path });
+    }
+    // 无显式模式：BYTEMAKER_CASSETTE 决定（docs §3.1）。
+    match env_spec {
+        Some(cassette::CassetteSpec::Replay(p)) => Ok(ProviderSpec::Replay { cassette: p }),
+        Some(cassette::CassetteSpec::Record(p)) => record(p),
+        None => Err(AgentError::Other(format!(
+            "no provider mode: pass --replay/--live/--record or set BYTEMAKER_CASSETTE\n{USAGE}"
+        ))),
     }
 }
 
@@ -486,5 +649,60 @@ tasks:
         let text = report::render_compare(&c);
         assert!(text.contains("NEWLY FAILED: read-summary"), "got: {text}");
         assert!(text.contains("-50.0 pts") || text.contains("pts"), "rate drop must be shown");
+    }
+
+    mod cli_tests {
+        use super::super::*;
+        use std::path::PathBuf;
+
+        fn args(v: &[&str]) -> Vec<String> {
+            v.iter().map(|s| s.to_string()).collect()
+        }
+
+        #[test]
+        fn flag_helpers() {
+            let a = args(&["run", "--suite", "core", "--replay"]);
+            assert!(has_flag(&a, "--replay"));
+            assert!(!has_flag(&a, "--live"));
+            assert_eq!(flag_value(&a, "--suite").as_deref(), Some("core"));
+            assert_eq!(flag_value(&a, "--cassette"), None);
+        }
+
+        #[test]
+        fn resolve_spec_replay_defaults_to_suite_cassette() {
+            // 环境变量会干扰该测试 —— 串行 + 清空。
+            let _g = crate::eval::cassette::tests_env_lock();
+            std::env::remove_var("BYTEMAKER_CASSETTE");
+            let tmp = tempfile::TempDir::new().unwrap();
+            let cassette = tmp.path().join("core.json");
+            std::fs::write(&cassette, "").unwrap();
+            let spec = resolve_spec(
+                &args(&["--replay"]),
+                "core",
+                |_name| Some(cassette.clone()),
+            )
+            .unwrap();
+            match spec {
+                ProviderSpec::Replay { cassette: p } => assert_eq!(p, cassette),
+                other => panic!("expected Replay, got {other:?}"),
+            }
+            // 盒带不存在 → 可行动错误。
+            let err = resolve_spec(&args(&["--replay"]), "core", |_name| None).unwrap_err();
+            assert!(err.to_string().contains("does not exist"), "got: {err}");
+        }
+
+        #[test]
+        fn resolve_spec_requires_a_mode() {
+            let _g = crate::eval::cassette::tests_env_lock();
+            std::env::remove_var("BYTEMAKER_CASSETTE");
+            let err = resolve_spec(&args(&[]), "core", |_name| None).unwrap_err();
+            assert!(err.to_string().contains("--replay"), "got: {err}");
+        }
+
+        #[test]
+        fn usage_message_documents_both_subcommands() {
+            let _ = PathBuf::from("."); // PathBuf 已在作用域
+            assert!(USAGE.contains("eval run") && USAGE.contains("eval compare"));
+        }
     }
 }

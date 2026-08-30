@@ -322,7 +322,7 @@ pub fn spec_from_env() -> Result<Option<CassetteSpec>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::domain::message::{ContentBlock, Message, MessagesResponse};
     use crate::providers::{CallResult, LlmProvider, MockProvider};
@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn spec_from_env_parses_record_suffix_and_missing_file() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = tests_env_lock();
         std::env::set_var("BYTEMAKER_CASSETTE", "some/path.json+record");
         assert!(matches!(
             spec_from_env().unwrap(),
@@ -461,8 +461,12 @@ mod tests {
         assert!(spec_from_env().unwrap().is_none());
     }
 
-    /// env 变量测试串行化（对齐 config.rs 的做法）。
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// 跨模块共享的 env 串行锁（spec_from_env 测试与 CLI 测试都用）。
+    #[cfg(test)]
+    pub(crate) fn tests_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap()
+    }
 
     #[test]
     fn recorded_response_roundtrips_messages_response() {
@@ -477,3 +481,7 @@ mod tests {
         assert_eq!(RecordedResponse::from_response(&resp).usage.unwrap().output_tokens, 2);
     }
 }
+
+// 提升到 cassette 模块层，供 eval CLI 测试以 `cassette::tests_env_lock()` 引用。
+#[cfg(test)]
+pub(crate) use tests::tests_env_lock;

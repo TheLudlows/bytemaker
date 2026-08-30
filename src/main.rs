@@ -13,6 +13,13 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), AgentError> {
+    // ch5: `bytemaker eval ...` 子命令。必须在 Config::from_env() 之前分发——
+    // `--replay` 离线回放不要求 OPENAI_API_KEY（docs/5.evals.md 验收 #3）。
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("eval") {
+        return bytemaker::eval::run_cli(&argv[2..]).await;
+    }
+
     dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(
