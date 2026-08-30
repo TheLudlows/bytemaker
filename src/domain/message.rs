@@ -222,7 +222,7 @@ pub struct Usage {
 }
 
 /// Model API response (accumulated stream result).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessagesResponse {
     pub content: Vec<ContentBlock>,
     pub finish_reason: String,

@@ -4,4 +4,5 @@
 //! 逐步声明；`EvalRunner` 与 `eval` CLI 子命令见后续任务。
 
 pub mod cassette;
+pub mod fault;
 pub mod fingerprint;
