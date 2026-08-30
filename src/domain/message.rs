@@ -38,7 +38,7 @@ impl Default for Role {
 }
 
 /// A message.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<ContentBlock>,
@@ -48,7 +48,7 @@ pub struct Message {
 ///
 /// Shared by requests and responses: serialized tagged by `type`
 /// (text/tool_call/tool_output). Callers build Text/ToolOutput, read ToolCall/Text.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
@@ -214,7 +214,8 @@ impl MessageBuilder {
 }
 
 /// Token usage captured from the SSE stream (s16 workflow plumbing).
-#[derive(Debug, Clone, Default)]
+/// s18（ch5 eval）：额外 derive Serialize/Deserialize，供盒带 JSONL 落盘。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
