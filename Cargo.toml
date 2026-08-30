@@ -39,5 +39,5 @@ tokio-util = "0.7"
 rmcp = { version = "3", features = ["client", "transport-child-process"] }
 async-openai = { version = "0.41", default-features = false, features = ["chat-completion", "rustls"] }  # 请使用最新版本
 async-openai-macros="0.3"
+tempfile = "3"  # eval 工作区布景（suite.rs）与测试共用
 [dev-dependencies]
-tempfile = "3"
