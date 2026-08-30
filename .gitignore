@@ -102,3 +102,6 @@ web/out/
 analysis/
 analysis_progress.md
 test_providers.py
+
+# --- ch5 evals: run reports are local artifacts; cassettes ARE tracked ---
+evals/runs/

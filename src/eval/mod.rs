@@ -705,4 +705,96 @@ tasks:
             assert!(USAGE.contains("eval run") && USAGE.contains("eval compare"));
         }
     }
+
+    mod core_suite {
+        use super::*;
+        use crate::eval::fault::{self, ScriptedProvider};
+        use crate::eval::suite::EvalSuite;
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        fn repo_evals() -> PathBuf {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("evals")
+        }
+
+        fn core_script() -> Vec<crate::domain::message::MessagesResponse> {
+            use fault::{text_response, tool_call_response as tc};
+            vec![
+                // 1. read-project-summary: read_file -> 回答 -> judge
+                tc("c1", "read_file", serde_json::json!({"path": "README.md"})),
+                text_response("bytemaker is a hands-on tutorial that builds a Claude Code-style coding agent in Rust, step by step."),
+                text_response(r#"{"pass": true, "score": 1.0, "rationale": "accurate summary"}"#),
+                // 2. create-and-read-back: write_file -> read_file -> 回答 -> judge
+                tc("c2", "write_file", serde_json::json!({"path": "test.py", "content": "print(\"hello\")\n"})),
+                tc("c3", "read_file", serde_json::json!({"path": "test.py"})),
+                text_response(r#"Created test.py containing print("hello") and read it back — the file exists and prints hello."#),
+                text_response(r#"{"pass": true, "score": 1.0, "rationale": "file created and read back"}"#),
+                // 3. find-python-files: glob -> 回答 -> judge
+                tc("c4", "glob", serde_json::json!({"pattern": "**/*.py"})),
+                text_response("There are no Python files in this directory."),
+                text_response(r#"{"pass": true, "score": 1.0, "rationale": "correctly reports none"}"#),
+                // 4. minimal-agent-question: 直接回答 -> judge
+                text_response("hello agent"),
+                text_response(r#"{"pass": true, "score": 1.0, "rationale": "exact match"}"#),
+                // 5. read-only-discipline: read_file -> 回答（无 judge 断言）
+                tc("c5", "read_file", serde_json::json!({"path": "README.md"})),
+                text_response("The first heading of README.md is: # bytemaker"),
+            ]
+        }
+
+        /// 重新生成提交版盒带（一次性维护操作，不进 CI）：
+        /// `cargo test regenerate_core_cassette -- --ignored`
+        #[tokio::test]
+        #[ignore = "regenerates evals/cassettes/core.json; run: cargo test regenerate_core_cassette -- --ignored"]
+        async fn regenerate_core_cassette() {
+            let evals = repo_evals();
+            let suite = EvalSuite::from_yaml_file(&evals.join("suites/core.yaml")).unwrap();
+            let runner = EvalRunner::new(
+                evals,
+                suite,
+                ProviderSpec::Record {
+                    cassette: repo_evals().join("cassettes/core.json"),
+                    inner: Box::new(ScriptedProvider::new(core_script())),
+                    model: "scripted".into(),
+                },
+                Arc::new(crate::tools::build_registry()),
+            )
+            .unwrap();
+            let report = runner.run().await.unwrap();
+            assert_eq!(
+                report.success_rate,
+                1.0,
+                "scripted record run must pass before committing the cassette:\n{}",
+                report.render_table()
+            );
+        }
+
+        /// 验收 #3/#5：CI 守卫——提交版盒带离线复放必须全绿（无 API key 环境）。
+        #[tokio::test]
+        async fn committed_core_cassette_replays_all_green() {
+            let evals = repo_evals();
+            let cassette = evals.join("cassettes/core.json");
+            assert!(
+                cassette.exists(),
+                "missing committed cassette; run: cargo test regenerate_core_cassette -- --ignored"
+            );
+            let suite = EvalSuite::from_yaml_file(&evals.join("suites/core.yaml")).unwrap();
+            let runner = EvalRunner::new(
+                evals,
+                suite,
+                ProviderSpec::Replay { cassette },
+                Arc::new(crate::tools::build_registry()),
+            )
+            .unwrap();
+            let report = runner.run().await.unwrap();
+            assert_eq!(
+                report.success_rate,
+                1.0,
+                "committed cassette must replay green:\n{}",
+                report.render_table()
+            );
+            // 验收 #5：≥5 个种子任务。
+            assert!(report.tasks.len() >= 5, "got {} tasks", report.tasks.len());
+        }
+    }
 }

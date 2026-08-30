@@ -1,0 +1,48 @@
+suite: core
+tasks:
+  # README 示例 #1（只读）
+  - name: read-project-summary
+    prompt: "Read the file README.md and tell me what this project is about"
+    workspace: fixtures/readme/
+    assertions:
+      - kind: judge
+        rubric: "回答准确概括了 bytemaker 是什么（一个用 Rust 逐步构建 Claude Code 风格编码 Agent 的教程项目）"
+      - kind: trajectory
+        max_steps: 6
+        max_tokens: 4000
+        forbidden_tools: [write_file, edit_file]
+  # README 示例 #2（写后读回）
+  - name: create-and-read-back
+    prompt: 'Create a file called test.py that prints "hello", then read it back'
+    workspace: fixtures/empty/
+    assertions:
+      - kind: judge
+        rubric: "test.py 被创建，且读回内容包含打印 hello 的逻辑"
+      - kind: trajectory
+        max_steps: 8
+  # README 示例 #3（搜索）
+  - name: find-python-files
+    prompt: "Find all Python files in this directory"
+    workspace: fixtures/readme/
+    assertions:
+      - kind: judge
+        rubric: "回答正确说明目录中没有 Python 文件"
+      - kind: trajectory
+        max_steps: 6
+        forbidden_tools: [write_file, edit_file]
+  # ch1 验收：最小 agent 问答
+  - name: minimal-agent-question
+    prompt: "Reply with exactly: hello agent"
+    assertions:
+      - kind: judge
+        rubric: "回答就是 hello agent（允许极小格式差异）"
+      - kind: trajectory
+        max_steps: 2
+  # ch2 验收：只读任务不许写文件
+  - name: read-only-discipline
+    prompt: "Read README.md and report its first heading. Do not modify anything."
+    workspace: fixtures/readme/
+    assertions:
+      - kind: trajectory
+        max_steps: 6
+        forbidden_tools: [write_file, edit_file, command]
