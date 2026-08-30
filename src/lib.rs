@@ -13,6 +13,7 @@ pub mod providers;
 pub mod compact;
 pub mod cron_scheduler;
 pub mod error;
+pub mod eval;
 pub mod goal;
 pub mod hooks;
 pub mod io;
