@@ -248,9 +248,10 @@ impl TaskStore {
     }
 }
 
-/// Test-only: build a TaskStore in the given dir, bypassing workspace validation
-/// (temp dirs fall outside the workspace). `tools` tests reuse this helper.
-#[cfg(test)]
+/// Build a TaskStore in the given dir, bypassing workspace validation (temp dirs
+/// fall outside the workspace). Originally test-only; now also used by
+/// `Agent::isolated` (ch5 eval runner stages agents in temp workspaces), so the
+/// cfg(test) gate is lifted.
 pub(crate) fn create_test_store(dir: &std::path::Path) -> TaskStore {
     let store_dir = dir.join("tasks");
     std::fs::create_dir_all(&store_dir).unwrap();

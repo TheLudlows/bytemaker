@@ -305,6 +305,63 @@ impl Agent {
         h
     }
 
+    /// Build an isolated Agent around an injected provider + registry（eval runner
+    /// 与 TestAgent 共用的构造法）。无 cron / 无 goal / 无 team；read-only memory
+    /// 指向空目录——recall 短路为空、extract/consolidate 返回 0，**不产生任何额外
+    /// LLM 调用**（顺序流盒带的前提，docs/5.evals.md §2.2）。
+    ///
+    /// registry 由调用方注入（eval 的 broken-tool 回归演示需要替换工具）。
+    // Task 9 的 eval runner 将在非测试构建中使用；TestAgent 仅在 cfg(test) 下调用，
+    // 故暂以 allow(dead_code) 压制非测试构建的告警。
+    #[allow(dead_code)]
+    pub(crate) fn isolated(
+        workdir: PathBuf,
+        client: Arc<dyn LlmProvider>,
+        io: Arc<crate::io::IO>,
+        hooks: Hooks,
+        base_system: String,
+        max_turns: usize,
+        registry: Arc<ToolRegistry>,
+    ) -> Agent {
+        let skills = Arc::new(SkillLoader::scan(workdir.join("skills"))); // 空目录 -> 空
+        // Tempdir 不在 current_dir 之下，TaskStore::new 的越界校验会拒绝；
+        // 直接组装（校验在 dispatch 层仍然生效）。
+        let task_store = Arc::new(crate::task_system::store::create_test_store(&workdir));
+        let bg_manager = Arc::new(BackgroundManager::new(
+            workdir.join(".task_outputs").join("background"),
+        ));
+        let todo_manager = Arc::new(SharedTodoManager::new(TodoManager::new()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&registry)));
+        let compactor = ContextCompactor::new(
+            workdir.join(".transcripts"),
+            workdir.join(".task_outputs").join("tool-results"),
+        );
+        let memory = MemoryStore::new_read_only(workdir.join(".memory"));
+        Agent {
+            client,
+            registry,
+            mcp_manager,
+            skills,
+            task_store,
+            bg_manager,
+            todo_manager,
+            io,
+            workdir,
+            goal: None,
+            total_tokens: Arc::new(AtomicU64::new(0)),
+            cron_manager: None,
+            compactor,
+            memory,
+            hooks,
+            base_system,
+            max_turns,
+            kind: AgentKind::Lead,
+            owner: "agent".to_string(),
+            team: None,
+            max_tokens: MAX_TOKENS,
+        }
+    }
+
     pub fn owner(&self) -> &str {
         &self.owner
     }
@@ -823,6 +880,20 @@ fn extract_final_text(content: &[ContentBlock]) -> Option<String> {
     }
 }
 
+/// 从消息列表提取最后一条 assistant 消息的文本（eval runner 取最终回答用）。
+// Task 9 的 eval runner 将在非测试构建中使用；目前仅 cfg(test) 下的测试调用，
+// 故暂以 allow(dead_code) 压制非测试构建的告警。
+#[allow(dead_code)]
+pub(crate) fn extract_final_text_from(messages: &[Message]) -> Option<String> {
+    let last_assistant = messages
+        .iter()
+        .rev()
+        .find(|m| m.role.as_str() == "assistant")
+        .map(|m| m.content.as_slice())
+        .unwrap_or(&[]);
+    extract_final_text(last_assistant)
+}
+
 /// Spawn a listener task that calls `cancel.cancel()` when `ctrl_c()` completes.
 ///
 /// During streaming the input thread is blocked in `blocking_recv` (terminal cooked
@@ -905,7 +976,6 @@ impl TestAgent {
             "http://localhost".into(),
             "test-model".into(),
         ));
-        let skills = Arc::new(SkillLoader::scan(workdir.join("skills"))); // empty dir -> empty
         // TaskStore::new compares the passed dir against current_dir to block out-of-bounds
         // access; tempdir isn't in the workspace, so use the cfg-test create_test_store
         // to assemble directly (bypassing validation).
@@ -915,43 +985,27 @@ impl TestAgent {
         ));
         let todo_manager = Arc::new(SharedTodoManager::new(TodoManager::new()));
         let registry = Arc::new(tools::build_registry());
-        // s14: test MCP manager.
-        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&registry)));
-        let hooks = Agent::build_hooks(&bg_manager, &todo_manager);
-        let team = Arc::new(
-            crate::team::TeamCtx::new(workdir.clone(), Arc::clone(&task_store)).unwrap(),
-        );
-        let compactor = ContextCompactor::new(
-            workdir.join(".transcripts"),
-            workdir.join(".task_outputs").join("tool-results"),
-        );
-        let memory = MemoryStore::new_read_only(workdir.join(".memory"));
         // In-memory I/O for tests.
         let io = Arc::new(crate::io::IO::memory());
 
-        let agent = Agent {
+        let mut agent = Agent::isolated(
+            workdir.clone(),
             client,
-            registry,
-            mcp_manager,
-            skills,
-            task_store,
-            bg_manager,
-            todo_manager,
             io,
-            workdir,
-            goal: None,
-            total_tokens: Arc::new(AtomicU64::new(0)),
-            cron_manager: None,
-            compactor,
-            memory,
-            hooks,
-            base_system: "test system".into(),
-            max_turns: usize::MAX,
-            kind: AgentKind::Lead,
-            owner: "agent".to_string(),
-            team: Some(team),
-            max_tokens: MAX_TOKENS,
-        };
+            Agent::build_hooks(&bg_manager, &todo_manager),
+            "test system".into(),
+            usize::MAX,
+            registry,
+        );
+        // isolated 内部会新建 bg/todo/task_store 实例；重新指回上面构造的实例，
+        // 保证 hooks（BackgroundStopHook / TodoReminderHook）、TeamCtx 与 agent 字段
+        // 共享同一 Arc —— 与重构前行为完全一致。
+        agent.task_store = Arc::clone(&task_store);
+        agent.bg_manager = Arc::clone(&bg_manager);
+        agent.todo_manager = Arc::clone(&todo_manager);
+        agent.team = Some(Arc::new(
+            crate::team::TeamCtx::new(workdir.clone(), Arc::clone(&task_store)).unwrap(),
+        ));
         Self { _tmp: tmp, agent }
     }
 
@@ -1052,6 +1106,42 @@ mod tests {
         assert!(child.cron_manager.is_none()); // subagents don't deliver cron tasks
         // compactor/memory always have values, but subagents use isolated dirs and read_only mode.
         assert_eq!(child.base_system, "sub");
+    }
+
+    #[test]
+    fn isolated_agent_has_no_cron_goal_team_and_readonly_memory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let client: Arc<dyn LlmProvider> = Arc::new(crate::providers::MockProvider::new("x"));
+        let io = Arc::new(crate::io::IO::memory());
+        let agent = Agent::isolated(
+            tmp.path().to_path_buf(),
+            client,
+            io,
+            Agent::build_hooks(
+                &Arc::new(BackgroundManager::new(tmp.path().join("bg"))),
+                &Arc::new(SharedTodoManager::new(TodoManager::new())),
+            ),
+            "isolated system".into(),
+            5,
+            Arc::new(tools::build_registry()),
+        );
+        assert_eq!(agent.kind, AgentKind::Lead);
+        assert_eq!(agent.max_turns, 5);
+        assert!(agent.cron_manager.is_none());
+        assert!(agent.goal.is_none());
+        assert!(agent.team.is_none());
+        assert_eq!(agent.base_system, "isolated system");
+    }
+
+    #[test]
+    fn extract_final_text_from_finds_last_assistant_text() {
+        let messages = vec![
+            Message::user_text("hi"),
+            Message::assistant_content(vec![ContentBlock::text("first")]),
+            Message::assistant_content(vec![ContentBlock::text("final answer")]),
+        ];
+        assert_eq!(extract_final_text_from(&messages).as_deref(), Some("final answer"));
+        assert_eq!(extract_final_text_from(&[]), None);
     }
 
     #[tokio::test]
