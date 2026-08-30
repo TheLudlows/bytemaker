@@ -6,5 +6,6 @@
 pub mod cassette;
 pub mod fault;
 pub mod fingerprint;
+pub mod judge;
 pub mod suite;
 pub mod trajectory;
