@@ -311,9 +311,6 @@ impl Agent {
     /// LLM 调用**（顺序流盒带的前提，docs/5.evals.md §2.2）。
     ///
     /// registry 由调用方注入（eval 的 broken-tool 回归演示需要替换工具）。
-    // Task 9 的 eval runner 将在非测试构建中使用；TestAgent 仅在 cfg(test) 下调用，
-    // 故暂以 allow(dead_code) 压制非测试构建的告警。
-    #[allow(dead_code)]
     pub(crate) fn isolated(
         workdir: PathBuf,
         client: Arc<dyn LlmProvider>,
@@ -881,9 +878,6 @@ fn extract_final_text(content: &[ContentBlock]) -> Option<String> {
 }
 
 /// 从消息列表提取最后一条 assistant 消息的文本（eval runner 取最终回答用）。
-// Task 9 的 eval runner 将在非测试构建中使用；目前仅 cfg(test) 下的测试调用，
-// 故暂以 allow(dead_code) 压制非测试构建的告警。
-#[allow(dead_code)]
 pub(crate) fn extract_final_text_from(messages: &[Message]) -> Option<String> {
     let last_assistant = messages
         .iter()

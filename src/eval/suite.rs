@@ -10,14 +10,14 @@ use std::path::Path;
 use serde::Deserialize;
 
 /// 任务集（`evals/suites/<name>.yaml`）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct EvalSuite {
     pub suite: String,
     pub tasks: Vec<EvalTask>,
 }
 
 /// 单条评测任务。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct EvalTask {
     pub name: String,
     pub prompt: String,
@@ -29,7 +29,7 @@ pub struct EvalTask {
 }
 
 /// 断言：`judge`（LLM-as-judge 语义打分）或 `trajectory`（纯规则行为约束）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Assertion {
     Judge {
