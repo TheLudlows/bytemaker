@@ -21,6 +21,14 @@ cargo run --release
 ./target/release/bytemaker
 ```
 
+评测子命令（第 5 章，详见 docs/5.evals.md）：
+
+```bash
+cargo run -- eval run --suite core --replay   # 离线回放盒带，CI 用（无需 OPENAI_API_KEY）
+cargo run -- eval run --suite core --live     # 真实 LLM，测真实成功率
+cargo run -- eval compare evals/runs/A.json evals/runs/B.json   # 回归对比
+```
+
 ## 示例提示词
 
 1. `Read the file README.md and tell me what this project is about`
