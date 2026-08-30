@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::domain::message::Message;
 use crate::providers::LlmProvider;
 
-/// 结构化裁决（docs §3.4）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 结构化裁决（docs §3.4）。`PartialEq` 供报告测试断言 `judge == None`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JudgeVerdict {
     pub pass: bool,
     pub score: f32,
